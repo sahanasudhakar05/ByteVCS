@@ -1,4 +1,3 @@
-
 # Python cache
 __pycache__/
 *.py[cod]
@@ -19,6 +18,21 @@ htmlcov/
 .env
 .env.*
 
-# Build files
+# Build artifacts
 build/
 dist/
+
+# Frontend dependencies and build output
+frontend/node_modules/
+frontend/dist/
+
+# Local database and runtime files
+*.db
+*.sqlite3
+*.log
+
+# Local development demo repository
+web-demo/
+
+repo-data/
+remote-repositories/

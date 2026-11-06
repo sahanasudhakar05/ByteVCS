@@ -1,0 +1,8 @@
+fastapi>=0.115
+uvicorn[standard]>=0.30
+sqlalchemy>=2.0
+psycopg[binary]>=3.2
+pwdlib[argon2]>=0.2
+PyJWT>=2.10
+alembic>=1.13
+python-dotenv>=1.0

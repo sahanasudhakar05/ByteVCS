@@ -165,11 +165,16 @@ def _status_data(repo_path: Path) -> dict[str, list[str]]:
         elif _working_hash(target) != staged_hash:
             result["unstaged_modified"].append(relative)
 
+    from bytevcs.folder_add import is_ignored, load_ignore  # local import avoids a cycle
+    ignore_patterns = load_ignore(repo_path)
+
     for target in repo_path.rglob("*"):
         if not target.is_file():
             continue
         relative = target.relative_to(repo_path).as_posix()
         if ".bytevcs" in Path(relative).parts:
+            continue
+        if is_ignored(relative, ignore_patterns):
             continue
         if relative not in index and relative not in head:
             result["untracked"].append(relative)
