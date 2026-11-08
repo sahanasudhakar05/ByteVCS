@@ -1,4 +1,4 @@
-﻿"""Push, pull and clone against a ByteVCS server (protocol v2).
+"""Push, pull and clone against a ByteVCS server (protocol v2).
 
 Objects are content-addressed, so only missing objects travel. Every object is
 checked against its hash on both ends, and the login token is only ever sent to
@@ -16,7 +16,7 @@ from urllib.parse import urlparse
 
 import httpx
 
-from bytevcs.credentials import load_credentials, whoami
+from bytevcs.credentials import check_secure, load_credentials, same_server, whoami
 from bytevcs.object_store import read_object, store_object
 from bytevcs.remotes import add_remote, list_remotes
 from bytevcs.repository import (
@@ -60,7 +60,14 @@ class _Remote:
         self.base, self.owner, self.name = _parse_url(url)
         creds = load_credentials()
         # Never send the token to a server other than the one it was issued for.
-        self.token = creds["token"] if creds["server"] == self.base else ""
+        self.mismatch = ""
+        if creds["token"] and same_server(creds["server"], self.base):
+            check_secure(self.base)
+            self.token = creds["token"]
+        else:
+            self.token = ""
+            if creds["token"]:
+                self.mismatch = creds["server"]
 
     def headers(self) -> dict:
         return {"Authorization": f"Bearer {self.token}"} if self.token else {}
@@ -82,9 +89,21 @@ class _Remote:
             except ValueError:
                 detail = ""
             if response.status_code == 401:
-                detail = "You are not logged in, or your token was revoked. Run: bytevcs login"
+                if self.mismatch:
+                    detail = (
+                        f"You are logged in to {self.mismatch}, but this remote is {self.base}. "
+                        f"Run: bytevcs login --server {self.base}"
+                    )
+                else:
+                    detail = "You are not logged in, or your token was revoked. Run: bytevcs login"
             elif response.status_code == 404 and not self.token:
-                detail = "Repository not found. If it is private, run: bytevcs login"
+                if self.mismatch:
+                    detail = (
+                        "Repository not found. If it is private, note that you are logged in to a "
+                        f"different server ({self.mismatch}). Run: bytevcs login --server {self.base}"
+                    )
+                else:
+                    detail = "Repository not found. If it is private, run: bytevcs login"
             raise RemoteError(detail or f"Server error ({response.status_code}).", response.status_code)
         return response.json()
 

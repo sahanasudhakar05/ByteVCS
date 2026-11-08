@@ -7,10 +7,39 @@ import os
 from pathlib import Path
 
 import httpx
+from urllib.parse import urlparse
 
 from bytevcs.repository import ByteVCSError
 
 DEFAULT_SERVER = "http://127.0.0.1:8000"
+
+
+def _origin(url: str) -> tuple[str, str, int]:
+    parsed = urlparse(url if "//" in url else "//" + url)
+    host = (parsed.hostname or "").lower()
+    if host in ("localhost", "127.0.0.1", "::1"):
+        host = "localhost"
+    scheme = (parsed.scheme or "http").lower()
+    port = parsed.port or (443 if scheme == "https" else 80)
+    return scheme, host, port
+
+
+def is_local(url: str) -> bool:
+    return _origin(url)[1] == "localhost"
+
+
+def same_server(a: str, b: str) -> bool:
+    """localhost and 127.0.0.1 count as the same machine."""
+    return _origin(a) == _origin(b)
+
+
+def check_secure(server: str) -> None:
+    """Never send a token over an unencrypted connection (except to this computer)."""
+    if _origin(server)[0] != "https" and not is_local(server):
+        raise ByteVCSError(
+            "Refusing to send your token over an unencrypted connection. "
+            "Use an https:// server address."
+        )
 
 
 def _config_dir() -> Path:
@@ -70,6 +99,8 @@ def whoami(server: str | None = None, token: str | None = None) -> dict:
     creds = load_credentials()
     server = (server or creds["server"]).rstrip("/")
     token = token or creds["token"]
+    if token:
+        check_secure(server)
     if not token:
         raise ByteVCSError("Not logged in. Run: bytevcs login")
     try:

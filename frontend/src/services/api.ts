@@ -1,6 +1,10 @@
-﻿import { supabase } from './supabase'
+import { supabase } from './supabase'
 
-const API = (import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000').replace(/\/$/, '')
+const configured = import.meta.env.VITE_API_URL as string | undefined
+if (import.meta.env.PROD && !configured) {
+  throw new Error('VITE_API_URL is not set. Set it to your API address before building the site.')
+}
+const API = (configured || 'http://127.0.0.1:8000').replace(/\/$/, '')
 export const API_BASE = API
 
 export type Repo = { id: string; owner: string | null; name: string; description: string; is_private: boolean; created_at: string }
