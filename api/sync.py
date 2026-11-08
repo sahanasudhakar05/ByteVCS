@@ -1,4 +1,4 @@
-﻿"""Push/pull/clone protocol (v2): incremental, verified, owner-checked."""
+"""Push/pull/clone protocol (v2): incremental, verified, owner-checked."""
 
 from __future__ import annotations
 
@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 
 from api.auth import get_current_user, get_db, get_optional_user
 from api.models import Repository, User
+from api.storage import StorageError, ensure_local, lock_for, persist
 from bytevcs.repository import (
     ByteVCSError,
     _valid_branch_name,
@@ -52,6 +53,10 @@ def _lock_for(key: str) -> threading.Lock:
 # ---------- storage helpers ----------
 
 def _root(repo: Repository) -> Path:
+    try:
+        ensure_local(repo)
+    except StorageError:
+        raise HTTPException(503, "Storage is temporarily unavailable. Please try again.")
     path = (DATA_ROOT / repo.storage_key).resolve()
     if not path.is_relative_to(DATA_ROOT) or not (path / ".bytevcs").is_dir():
         raise HTTPException(500, "Repository data is missing on the server.")
@@ -376,6 +381,7 @@ def push(request: PushRequest, repo: Repository = Depends(get_write_repo)):
                     root / ".bytevcs" / "refs" / "heads" / branch,
                     (new + "\n").encode("utf-8"),
                 )
+            persist(root)
         except (OSError, ByteVCSError, ValueError):
             raise HTTPException(500, "Could not store the push.")
 
@@ -383,3 +389,5 @@ def push(request: PushRequest, repo: Repository = Depends(get_write_repo)):
         "message": f"Updated {len(plan)} branch(es) with {len(extra)} new object(s).",
         "updated": [b for b, _, _ in plan],
     }
+
+_lock_for = lock_for  # one lock registry shared with storage restores

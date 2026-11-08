@@ -31,6 +31,7 @@ from api.auth import (
 )
 from api.models import ApiToken, Repository, User
 from bytevcs.repo_init import create_repository
+from api.storage import StorageError, ensure_local, persist
 from bytevcs.object_store import read_object
 from bytevcs.repository import (
     ByteVCSError,
@@ -127,6 +128,10 @@ def repo_dir(repo: Repository) -> Path:
 
 
 def repo_path(repo: Repository) -> Path:
+    try:
+        ensure_local(repo)
+    except StorageError:
+        raise HTTPException(503, "Storage is temporarily unavailable. Please try again.")
     path = repo_dir(repo)
     try:
         found = find_repository(path)
@@ -162,6 +167,11 @@ def capture(action, *args, **kwargs) -> str:
             action(*args, **kwargs)
     except (ByteVCSError, OSError, ValueError, KeyError) as exc:
         raise HTTPException(400, clean(str(exc))) from exc
+    if args and isinstance(args[0], Path):
+        try:
+            persist(args[0])
+        except StorageError:
+            raise HTTPException(503, "Storage is temporarily unavailable. Please try again.")
     return output.getvalue().strip()
 
 
@@ -241,6 +251,7 @@ def create_repo(
     try:
         DATA_ROOT.mkdir(parents=True, exist_ok=True)
         create_repository(path)
+        persist(path)
         db.commit()
     except Exception as exc:
         db.rollback()
@@ -664,3 +675,55 @@ def revoke_token(
     return {"message": "Token revoked."}
 from api.sync import router as sync_router
 app.include_router(sync_router)
+
+
+# ---------- public search and explore ----------
+
+from sqlalchemy import or_
+
+
+def _like(term: str) -> str:
+    escaped = term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"%{escaped}%"
+
+
+@app.get("/api/search")
+def search_repos(
+    q: str = "", limit: int = 20, offset: int = 0, db: Session = Depends(get_db)
+):
+    term = q.strip()[:100]
+    if not term:
+        raise HTTPException(400, "Enter something to search for.")
+    limit = max(1, min(limit, 50))
+    offset = max(0, min(offset, 1000))
+    pattern = _like(term)
+    rows = db.scalars(
+        select(Repository)
+        .join(User, Repository.owner_id == User.id)
+        .where(
+            Repository.is_private.is_(False),
+            User.username.is_not(None),
+            or_(
+                Repository.name.ilike(pattern, escape="\\"),
+                Repository.description.ilike(pattern, escape="\\"),
+                User.username.ilike(pattern, escape="\\"),
+            ),
+        )
+        .order_by(Repository.created_at.desc())
+        .limit(limit)
+        .offset(offset)
+    ).all()
+    return {"query": term, "repos": [repo_json(r) for r in rows]}
+
+
+@app.get("/api/explore")
+def explore(limit: int = 20, db: Session = Depends(get_db)):
+    limit = max(1, min(limit, 50))
+    rows = db.scalars(
+        select(Repository)
+        .join(User, Repository.owner_id == User.id)
+        .where(Repository.is_private.is_(False), User.username.is_not(None))
+        .order_by(Repository.created_at.desc())
+        .limit(limit)
+    ).all()
+    return {"repos": [repo_json(r) for r in rows]}

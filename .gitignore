@@ -36,3 +36,7 @@ web-demo/
 
 repo-data/
 remote-repositories/
+
+*.bak
+*.bak2
+*.pre-storage
