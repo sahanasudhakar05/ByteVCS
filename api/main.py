@@ -1,5 +1,5 @@
 """ByteVCS hosted API: authenticated, owner-isolated repositories."""
-
+import secrets
 import json
 import os
 import re
@@ -17,12 +17,19 @@ load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from api.auth import get_current_user, get_db, get_optional_user
-from api.models import Repository, User
+from api.auth import (
+    PAT_PREFIX,
+    get_current_user,
+    get_db,
+    get_optional_user,
+    get_session_user,
+    hash_token,
+)
+from api.models import ApiToken, Repository, User
 from bytevcs.repo_init import create_repository
 from bytevcs.object_store import read_object
 from bytevcs.repository import (
@@ -61,7 +68,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
     allow_credentials=False,
-    allow_methods=["GET", "POST", "PUT"],
+    allow_methods=["GET", "POST", "PUT","DELETE"],
     allow_headers=["Content-Type", "Authorization"],
 )
 
@@ -580,3 +587,80 @@ def public_file(path: str, repo: Repository = Depends(get_readable_repo)):
     except (ByteVCSError, OSError, ValueError):
         raise HTTPException(404, "File not found.")
     return {"path": path, "content": content}
+
+# ---------- personal access tokens (website login required) ----------
+
+MAX_TOKENS_PER_USER = 20
+
+
+class TokenRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+
+
+@app.post("/api/tokens", status_code=201)
+def create_token(
+    request: TokenRequest,
+    user: User = Depends(get_session_user),
+    db: Session = Depends(get_db),
+):
+    count = db.scalar(
+        select(func.count()).select_from(ApiToken).where(ApiToken.user_id == user.id)
+    )
+    if count >= MAX_TOKENS_PER_USER:
+        raise HTTPException(400, "Token limit reached. Revoke an old token first.")
+    raw = PAT_PREFIX + secrets.token_urlsafe(32)
+    row = ApiToken(
+        user_id=user.id,
+        name=request.name.strip(),
+        token_hash=hash_token(raw),
+        prefix=raw[:10],
+    )
+    db.add(row)
+    db.commit()
+    return {
+        "id": str(row.id),
+        "name": row.name,
+        "token": raw,
+        "note": "Copy this token now. It will not be shown again.",
+    }
+
+
+@app.get("/api/tokens")
+def list_tokens(
+    user: User = Depends(get_session_user), db: Session = Depends(get_db)
+):
+    rows = db.scalars(
+        select(ApiToken)
+        .where(ApiToken.user_id == user.id)
+        .order_by(ApiToken.created_at.desc())
+    ).all()
+    return {
+        "tokens": [
+            {
+                "id": str(t.id),
+                "name": t.name,
+                "prefix": t.prefix,
+                "created_at": t.created_at.isoformat(),
+                "last_used_at": t.last_used_at.isoformat() if t.last_used_at else None,
+            }
+            for t in rows
+        ]
+    }
+
+
+@app.delete("/api/tokens/{token_id}")
+def revoke_token(
+    token_id: uuid.UUID,
+    user: User = Depends(get_session_user),
+    db: Session = Depends(get_db),
+):
+    row = db.scalar(
+        select(ApiToken).where(ApiToken.id == token_id, ApiToken.user_id == user.id)
+    )
+    if row is None:
+        raise HTTPException(404, "Token not found.")
+    db.delete(row)
+    db.commit()
+    return {"message": "Token revoked."}
+from api.sync import router as sync_router
+app.include_router(sync_router)

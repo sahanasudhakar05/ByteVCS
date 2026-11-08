@@ -1,4 +1,4 @@
-
+﻿
 """Command-line interface for ByteVCS."""
 
 import argparse
@@ -116,13 +116,18 @@ def main() -> None:
 
     push_parser = subparsers.add_parser("push", help="Push repository to a configured remote")
     push_parser.add_argument("remote", nargs="?", default="origin")
+    push_parser.add_argument("--public", action="store_true", help="Make the repository public when it is first created (default: private)")
+    push_parser.add_argument("--name", default=None, help="Repository name to create on the server (default: folder name)")
     pull_parser = subparsers.add_parser("pull", help="Pull repository from a configured remote")
     pull_parser.add_argument("remote", nargs="?", default="origin")
     clone_parser = subparsers.add_parser("clone", help="Clone a remote ByteVCS repository")
     clone_parser.add_argument("url")
     clone_parser.add_argument("path", nargs="?", default=None)
 
-    # Remote configuration
+    login_parser = subparsers.add_parser("login", help="Log in to a ByteVCS server with a token")
+    login_parser.add_argument("--server", default=None, help="Server URL (default: saved or http://127.0.0.1:8000)")
+    subparsers.add_parser("logout", help="Remove the saved login")
+    subparsers.add_parser("whoami", help="Show who you are logged in as")
     remote_parser = subparsers.add_parser(
         "remote", help="Manage repository remotes"
     )
@@ -157,6 +162,25 @@ def main() -> None:
             print(f"Cloned repository into {result}")
             return
 
+        if args.command == "login":
+            import getpass
+            from bytevcs.credentials import load_credentials, login as do_login
+            server = args.server or load_credentials()["server"]
+            token = getpass.getpass("Paste your ByteVCS token (input is hidden): ")
+            print(do_login(server, token))
+            return
+
+        if args.command == "logout":
+            from bytevcs.credentials import clear_credentials
+            print("Logged out." if clear_credentials() else "You were not logged in.")
+            return
+
+        if args.command == "whoami":
+            from bytevcs.credentials import load_credentials, whoami
+            info = whoami()
+            print(f"{info['username']} ({info['email']}) on {load_credentials()['server']}")
+            return
+
         repo = find_repository(".")
 
         if args.command == "add":
@@ -184,7 +208,7 @@ def main() -> None:
         elif args.command == "merge":
             merge_branch(repo, args.branch)
         elif args.command == "push":
-            print(push_repository(repo, args.remote))
+            print(push_repository(repo, args.remote, public=args.public, name=args.name))
         elif args.command == "pull":
             print(pull_repository(repo, args.remote))
         elif args.command == "remote":
@@ -211,3 +235,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+

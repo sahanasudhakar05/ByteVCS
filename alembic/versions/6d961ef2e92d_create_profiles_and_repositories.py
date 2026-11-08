@@ -43,6 +43,7 @@ def upgrade() -> None:
     op.create_index(op.f('ix_repositories_owner_id'), 'repositories', ['owner_id'], unique=False)
     op.execute("ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY")
     op.execute("ALTER TABLE public.repositories ENABLE ROW LEVEL SECURITY")
+    op.execute("ALTER TABLE public.api_tokens ENABLE ROW LEVEL SECURITY")
     # ### end Alembic commands ###
 
 

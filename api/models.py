@@ -1,4 +1,4 @@
-"""Database models for application users and hosted repositories."""
+﻿"""Database models for application users and hosted repositories."""
 
 import uuid
 from datetime import datetime, timezone
@@ -77,3 +77,28 @@ class Repository(Base):
     )
 
     owner: Mapped[User] = relationship(back_populates="repositories")
+
+
+
+class ApiToken(Base):
+    """Personal access token for the CLI. Only a hash is stored."""
+
+    __tablename__ = "api_tokens"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, primary_key=True, default=uuid.uuid4
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("profiles.id", ondelete="CASCADE"),
+        index=True,
+        nullable=False,
+    )
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    prefix: Mapped[str] = mapped_column(String(16), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, nullable=False
+    )
+    last_used_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
