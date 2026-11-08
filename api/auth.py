@@ -6,6 +6,7 @@ Two kinds of bearer credential:
 """
 
 import hashlib
+import logging
 import os
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -68,7 +69,7 @@ def verify_token(token: str) -> dict:
             options={"require": ["sub", "exp", "iss", "aud"]},
         )
     except (jwt.PyJWTError, jwt.exceptions.PyJWKClientError) as exc:
-        print(f"TOKEN REJECTED: {type(exc).__name__}: {exc}")
+        logging.getLogger("bytevcs.auth").warning("token rejected: %s", type(exc).__name__)
         raise HTTPException(401, "Invalid or expired token.")
 
 

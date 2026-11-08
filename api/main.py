@@ -63,11 +63,78 @@ NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,99}")
 MAX_FILE_BYTES = 1_000_000
 MAX_BUNDLE_BYTES = 25 * 1024 * 1024
 
+def _cors_origins() -> list[str]:
+    raw = os.environ.get("CORS_ORIGINS", "").strip()
+    if raw:
+        return [o.strip().rstrip("/") for o in raw.split(",") if o.strip()]
+    return ["http://localhost:5173", "http://127.0.0.1:5173"]
+
 app = FastAPI(title="ByteVCS API", version="0.2.0")
+
+# ---------- request rate limiting (per client address, in memory) ----------
+import threading as _threading
+import time as _time
+from collections import deque as _deque
+
+from fastapi import Request
+from fastapi.responses import JSONResponse
+
+RATE_RULES = [
+    # (path, method or None for any, max requests, window in seconds); "=" means exact path
+    ("=/api/tokens", "POST", 10, 3600),
+    ("=/api/me/username", "PUT", 10, 3600),
+    ("=/api/repos", "POST", 30, 3600),
+    ("/api/search", None, 30, 60),
+    ("/api/explore", None, 60, 60),
+    ("/api/r/", "POST", 120, 60),
+    ("/api/", None, 600, 60),
+]
+_rate_hits: dict = {}
+_rate_lock = _threading.Lock()
+
+
+def _rate_check(request: Request) -> int:
+    """Return 0 if the request is allowed, otherwise how many seconds to wait."""
+    path = request.url.path
+    method = request.method.upper()
+    for index, (rule, rule_method, limit, window) in enumerate(RATE_RULES):
+        exact = rule.startswith("=")
+        target = rule.lstrip("=")
+        matches = path == target if exact else path.startswith(target)
+        if matches and (rule_method is None or rule_method == method):
+            break
+    else:
+        return 0
+    client = request.client.host if request.client else "unknown"
+    now = _time.monotonic()
+    with _rate_lock:
+        hits = _rate_hits.setdefault((index, client), _deque())
+        while hits and now - hits[0] > window:
+            hits.popleft()
+        if len(hits) >= limit:
+            return int(window - (now - hits[0])) + 1
+        hits.append(now)
+        if len(_rate_hits) > 20000:
+            for key in [k for k, v in _rate_hits.items() if not v or now - v[-1] > 3600]:
+                _rate_hits.pop(key, None)
+    return 0
+
+
+@app.middleware("http")
+async def rate_limit(request: Request, call_next):
+    if request.method != "OPTIONS":
+        wait = _rate_check(request)
+        if wait:
+            return JSONResponse(
+                {"detail": "Too many requests. Please slow down and try again shortly."},
+                status_code=429,
+                headers={"Retry-After": str(wait)},
+            )
+    return await call_next(request)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_origins=_cors_origins(),
     allow_credentials=False,
     allow_methods=["GET", "POST", "PUT","DELETE"],
     allow_headers=["Content-Type", "Authorization"],
@@ -439,39 +506,6 @@ def merge(request: BranchRequest, repo: Repository = Depends(get_owned_repo)):
     return {"message": capture(merge_branch, repo_path(repo), request.name)}
 
 
-# ---------- remote push/pull transport (owner-checked) ----------
-
-def bundle_file(repo: Repository) -> Path:
-    return REMOTE_ROOT / f"{repo.storage_key}.json"
-
-
-@app.get("/api/remote/repos/{repo_id}")
-def download_remote(repo: Repository = Depends(get_owned_repo)):
-    path = bundle_file(repo)
-    if not path.is_file():
-        raise HTTPException(404, "Nothing pushed to this repository yet.")
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except Exception as exc:
-        raise HTTPException(500, "Remote repository data is invalid.") from exc
-
-
-@app.put("/api/remote/repos/{repo_id}")
-def upload_remote(bundle: dict[str, Any], repo: Repository = Depends(get_owned_repo)):
-    if (
-        bundle.get("format") != 1
-        or not isinstance(bundle.get("metadata"), dict)
-        or not isinstance(bundle.get("worktree"), dict)
-    ):
-        raise HTTPException(400, "Invalid ByteVCS bundle.")
-    encoded = json.dumps(bundle)
-    if len(encoded) > MAX_BUNDLE_BYTES:
-        raise HTTPException(413, "Repository bundle exceeds the 25 MB limit.")
-    path = bundle_file(repo)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(encoded, encoding="utf-8")
-    return {"message": f"Pushed '{repo.name}' successfully.", "bytes": len(encoded)}
-
 # ---------- usernames, visibility, public read access ----------
 
 USERNAME_RE = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,37}[a-z0-9])?")
@@ -727,3 +761,25 @@ def explore(limit: int = 20, db: Session = Depends(get_db)):
         .limit(limit)
     ).all()
     return {"repos": [repo_json(r) for r in rows]}
+
+
+# ---------- readiness (database + storage) ----------
+
+from sqlalchemy import text as sql_text
+from api.storage import ping as storage_ping
+
+
+@app.get("/api/ready")
+def ready(db: Session = Depends(get_db)):
+    problems = []
+    try:
+        db.execute(sql_text("select 1"))
+    except Exception:
+        problems.append("database")
+    try:
+        storage_ping()
+    except StorageError:
+        problems.append("storage")
+    if problems:
+        raise HTTPException(503, "Not ready: " + ", ".join(problems))
+    return {"ok": True}

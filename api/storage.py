@@ -347,6 +347,13 @@ def ensure_local(repo) -> None:
         _hydrate(root, key)
 
 
+def ping() -> bool:
+    """True if storage is disabled, or configured and reachable. Raises StorageError otherwise."""
+    if not enabled():
+        return True
+    _list_objects("_health")
+    return True
+
 # ---------- command line: selftest / migrate ----------
 
 def selftest() -> None:
