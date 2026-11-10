@@ -1,6 +1,7 @@
 """ByteVCS hosted API: authenticated, owner-isolated repositories."""
 import secrets
 import json
+import logging
 import os
 import re
 import shutil
@@ -778,7 +779,8 @@ def ready(db: Session = Depends(get_db)):
         problems.append("database")
     try:
         storage_ping()
-    except StorageError:
+    except StorageError as exc:
+        logging.getLogger("bytevcs").warning("storage not ready: %s", exc)
         problems.append("storage")
     if problems:
         raise HTTPException(503, "Not ready: " + ", ".join(problems))
