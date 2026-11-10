@@ -1,8 +1,9 @@
-﻿import { useEffect, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { API_BASE, request, type Repo } from './services/api'
 import { btn, code, ghost, muted, page, row } from './ui'
 import { Link } from './router.tsx'
 import { TopBar } from './Explore.tsx'
+import Timeline from './Timeline.tsx'
 
 type Info = Repo & { branch: string; head: string | null }
 type CommitItem = { hash: string; short_hash: string; message: string; timestamp?: string | null }
@@ -13,7 +14,7 @@ export default function PublicRepo({ owner, name, loggedIn }: { owner: string; n
   const [info, setInfo] = useState<Info | null>(null)
   const [commits, setCommits] = useState<CommitItem[]>([])
   const [files, setFiles] = useState<string[]>([])
-  const [tab, setTab] = useState<'files' | 'commits'>('files')
+  const [tab, setTab] = useState<'files' | 'commits' | 'timeline'>('files')
   const [openPath, setOpenPath] = useState('')
   const [content, setContent] = useState('')
   const [fileError, setFileError] = useState('')
@@ -68,7 +69,8 @@ export default function PublicRepo({ owner, name, loggedIn }: { owner: string; n
 
           <p>
             <button style={tab === 'files' ? btn : ghost} onClick={() => setTab('files')}>Files ({files.length})</button>{' '}
-            <button style={tab === 'commits' ? btn : ghost} onClick={() => setTab('commits')}>Commits ({commits.length})</button>
+            <button style={tab === 'commits' ? btn : ghost} onClick={() => setTab('commits')}>Commits ({commits.length})</button>{' '}
+            <button style={tab === 'timeline' ? btn : ghost} onClick={() => setTab('timeline')}>Time machine</button>
           </p>
 
           {tab === 'files' && (
@@ -90,6 +92,8 @@ export default function PublicRepo({ owner, name, loggedIn }: { owner: string; n
               )}
             </>
           )}
+
+          {tab === 'timeline' && <Timeline base={base} />}
 
           {tab === 'commits' && (
             <>

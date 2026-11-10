@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import './App.css'
 import { request, type Repo } from './services/api'
 import { supabase } from './services/supabase'
+import { navigate } from './router.tsx'
 
 type Commit = { hash: string; short_hash: string; message: string; timestamp?: string; parent?: string | null; merge_parent?: string | null }
 type FileItem = { path: string; tracked: boolean; staged: boolean; status: string }
@@ -63,6 +64,7 @@ function App({ repo, onBack }: { repo: Repo; onBack: () => void }) {
       <div className="brand"><div className="brand-mark">B</div><div><b>bytevcs<span>.</span></b><small>CODE, IN CONTROL</small></div></div>
       <p className="eyebrow">WORKSPACE</p>
       {['Overview', 'Commits', 'Branches', 'Changes', 'Diff'].map((item) => <button key={item} className={`nav-button ${active === item ? 'selected' : ''}`} onClick={() => setActive(item)}>{item}</button>)}
+      {repo.owner && <button className="nav-button" onClick={() => navigate(`/${repo.owner}/${repo.name}`)}>Time machine</button>}
       <button className="nav-button" onClick={onBack}>All repositories</button>
       <button className="nav-button" onClick={() => void supabase.auth.signOut()}>Log out</button>
       <div className="side-repo"><span className="status-dot"/> <b>{repository?.name || repo.name}</b><small>Hosted repository</small><small className="muted">{repository?.branch || 'Loading branch…'}</small></div>

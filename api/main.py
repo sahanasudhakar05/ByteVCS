@@ -783,3 +783,104 @@ def ready(db: Session = Depends(get_db)):
     if problems:
         raise HTTPException(503, "Not ready: " + ", ".join(problems))
     return {"ok": True}
+
+# ---------- time machine: history summary, tree at a commit, file at a commit ----------
+
+_HASH64 = re.compile(r"[0-9a-f]{64}")
+_TIMELINE_MAX_FILES = 2000
+
+
+def _blob_size(root: Path, h: str, cache: dict) -> int:
+    if h not in cache:
+        try:
+            cache[h] = (root / ".bytevcs" / "objects" / h[:2] / h[2:]).stat().st_size
+        except OSError:
+            cache[h] = 0
+    return cache[h]
+
+
+def _snapshot_at(root: Path, commit: str):
+    if not _HASH64.fullmatch(commit):
+        raise HTTPException(400, "Invalid commit.")
+    try:
+        data = _read_commit(root, commit)
+        snap = _read_snapshot(root, commit)
+        parent = data.get("parent")
+        prev = _read_snapshot(root, parent) if parent else {}
+    except (ByteVCSError, OSError, ValueError):
+        raise HTTPException(404, "Commit not found.")
+    return snap, prev
+
+
+@app.get("/api/u/{owner}/{name}/timeline")
+def public_timeline(limit: int = 200, repo: Repository = Depends(get_readable_repo)):
+    root = repo_path(repo)
+    limit = max(1, min(limit, 300))
+    chain, seen = [], set()
+    current = _current_commit_hash(root)
+    while current and current not in seen and len(chain) < limit:
+        seen.add(current)
+        try:
+            commit = _read_commit(root, current)
+        except ByteVCSError:
+            break
+        chain.append((current, commit))
+        current = commit.get("parent")
+    chain.reverse()
+    cache: dict = {}
+    prev: dict = {}
+    result = []
+    for h, commit in chain:
+        try:
+            snap = _read_snapshot(root, h)
+        except ByteVCSError:
+            break
+        result.append({
+            "hash": h,
+            "short_hash": h[:8],
+            "message": commit.get("message", ""),
+            "timestamp": commit.get("timestamp"),
+            "merge": bool(commit.get("merge_parent")),
+            "file_count": len(snap),
+            "bytes": sum(_blob_size(root, v, cache) for v in snap.values()),
+            "added": sum(1 for p in snap if p not in prev),
+            "modified": sum(1 for p in snap if p in prev and prev[p] != snap[p]),
+            "deleted": sum(1 for p in prev if p not in snap),
+        })
+        prev = snap
+    return {"commits": result, "more_history": bool(current)}
+
+
+@app.get("/api/u/{owner}/{name}/tree")
+def public_tree(commit: str, repo: Repository = Depends(get_readable_repo)):
+    root = repo_path(repo)
+    snap, prev = _snapshot_at(root, commit)
+    cache: dict = {}
+    files = []
+    for p in sorted(snap):
+        status = "added" if p not in prev else ("modified" if prev[p] != snap[p] else "unchanged")
+        files.append({"path": p, "size": _blob_size(root, snap[p], cache), "status": status})
+    removed = [
+        {"path": p, "size": _blob_size(root, prev[p], cache), "status": "deleted"}
+        for p in sorted(set(prev) - set(snap))
+    ]
+    everything = files + removed
+    return {"files": everything[:_TIMELINE_MAX_FILES], "truncated": len(everything) > _TIMELINE_MAX_FILES}
+
+
+@app.get("/api/u/{owner}/{name}/file-at")
+def public_file_at(commit: str, path: str, repo: Repository = Depends(get_readable_repo)):
+    root = repo_path(repo)
+    snap, _ = _snapshot_at(root, commit)
+    if path not in snap:
+        raise HTTPException(404, "File not found in that commit.")
+    try:
+        data = read_object(str(root), snap[path])
+    except (ByteVCSError, OSError, ValueError):
+        raise HTTPException(404, "File not found in that commit.")
+    if len(data) > 1_000_000:
+        raise HTTPException(413, "This file is larger than 1 MB.")
+    try:
+        return {"path": path, "content": data.decode("utf-8")}
+    except UnicodeDecodeError:
+        raise HTTPException(415, "This file is not UTF-8 text.")
